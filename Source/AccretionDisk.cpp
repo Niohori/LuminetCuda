@@ -15,9 +15,10 @@ AccretionDisk::AccretionDisk(const double& mass, const double& incl, const doubl
 	minFluxSecundary = 1e15;
 	plot = new Plotter;
 	DIM = 0;
-	plot->create();
+	//plot->create();
 	//std::cout << "Number of particles: " << nParticles << std::endl;
-	createDisk();
+	//createDisk();
+	createDiskBMP();
 };
 
 AccretionDisk::~AccretionDisk() {
@@ -43,7 +44,7 @@ void AccretionDisk::createDisk() {
 	DIM = N * nBytes;
 	nParticles = DIM * DIM;
 	std::cout << " N = " << N << " DIM= " << DIM << " nParticles = " << nParticles << std::endl;
-	bitmap = CPUAnimBitmap(DIM, DIM, &data);
+	bitmap = CPUAnimBitmap(BMPDIM, BMPDIM, &data);
 	data.bitmap = &bitmap;
 	std::cout << "Bitmap environment created" << std::endl;
 	HANDLE_ERROR(cudaMalloc((void**)&data.dev_bitmap,
@@ -51,7 +52,7 @@ void AccretionDisk::createDisk() {
 
 	std::cout << "Bitmap GPU memory allocated" << std::endl;
 	HANDLE_ERROR(cudaMalloc((void**)&data.dev_particles,
-		bitmap.image_size() / 2));//contains
+		bitmap.image_size() ));//contains
 	std::cout << "Particles GPU memory allocated" << std::endl;
 	Particles = (double*)malloc(nParticles * 8 * sizeof(double));
 	std::cout << "Bitmap GPU memory allocated" << std::endl;
@@ -92,11 +93,7 @@ void AccretionDisk::createDisk() {
 		Particles[n * 8 + 7] = std::pow((std::abs(Particles[n * 8 + 7]) + minFluxSecundary) / (maxFluxSecundary + minFluxSecundary), powerScale) / 2;//Enhances "contrast"
 		//std::cout <<"(x,y): ("<<Particles[n * 8 + 2]<< ", " << Particles[n * 8 + 3] << ") -> Primary Flux " << Particles[n * 8 + 4] << " and Secundary " << Particles[n * 8 + 7] << std::endl;
 	}
-	//std::cout << "And on the 0th day, God created the black hole" << std::endl;
-	//
-	//
-	//plot->plot_BlackHole(nParticles, Particles, maxWidth, false);
-	////plot.plot_rAlpha(bPrimaryParticles, alphaPrimaryParticles);
+
 }
 
 /**
@@ -109,8 +106,6 @@ void AccretionDisk::createDisk() {
 * @return None:
 =====================================================================================================================================*/
 void AccretionDisk::play() {
-
-
 	increment(DIM, incr, ParticlesCuda, nParticles, minFluxPrimary, maxFluxPrimary, minFluxSecundary, maxFluxSecundary, powerScale, inclination, M);
 
 	// Check for kernel launch errors
@@ -120,34 +115,57 @@ void AccretionDisk::play() {
 	// Copy data from device (GPU) host (CPU)
 	HANDLE_ERROR(cudaMemcpy(Particles, ParticlesCuda, nParticles * 8 * sizeof(double), cudaMemcpyDeviceToHost));
 
-	//for (int n = 0; n < nParticles; n++) {
-	//	Particles[n * 8 + 4] = std::pow((std::abs(Particles[n * 8 + 4]) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale);//Enhances "contrast"
-	//	Particles[n * 8 + 7] = std::pow((std::abs(Particles[n * 8 + 7]) + minFluxSecundary) / (maxFluxSecundary + minFluxSecundary), powerScale) / 2;//Enhances "contrast"
-	//	//std::cout <<"(x,y): ("<<Particles[n * 8 + 2]<< ", " << Particles[n * 8 + 3] << ") -> Primary Flux " << Particles[n * 8 + 4] << " and Secundary " << Particles[n * 8 + 7] << std::endl;
-	//}
 	//auto t1 = std::chrono::high_resolution_clock::now();
 	plot->plot_BlackHole(nParticles, Particles, maxWidth, true);
 	//auto t2 = std::chrono::high_resolution_clock::now();
 	//std::cout << "Time for ploting: " << (t2 - t1).count() / 1e6 << " ms." << std::endl;
 }
 //
-void AccretionDisk::generate_frame(DataBlock* d, int tick) {
-	//increment(DIM, incr, ParticlesCuda, nParticles, minFluxPrimary, maxFluxPrimary, minFluxSecundary, maxFluxSecundary, powerScale, inclination, M);
+//void AccretionDisk::generate_frame(DataBlock* d, int tick) {
+//	//increment(DIM, incr, ParticlesCuda, nParticles, minFluxPrimary, maxFluxPrimary, minFluxSecundary, maxFluxSecundary, powerScale, inclination, M);
+//
+//	//// Check for kernel launch errors
+//	//HANDLE_ERROR(cudaGetLastError());
+//	//HANDLE_ERROR(cudaDeviceSynchronize());
+//
+//	//// Copy data from device (GPU) host (CPU)
+//	//HANDLE_ERROR(cudaMemcpy(Particles, ParticlesCuda, nParticles * 8 * sizeof(double), cudaMemcpyDeviceToHost));
+//
+//	//for (int n = 0; n < nParticles; n++) {
+//	//	Particles[n * 8 + 4] = std::pow((std::abs(Particles[n * 8 + 4]) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale);//Enhances "contrast"
+//	//	Particles[n * 8 + 7] = std::pow((std::abs(Particles[n * 8 + 7]) + minFluxSecundary) / (maxFluxSecundary + minFluxSecundary), powerScale) / 2;//Enhances "contrast"
+//	//	//std::cout <<"(x,y): ("<<Particles[n * 8 + 2]<< ", " << Particles[n * 8 + 3] << ") -> Primary Flux " << Particles[n * 8 + 4] << " and Secundary " << Particles[n * 8 + 7] << std::endl;
+//	//}
+//	//auto t1 = std::chrono::high_resolution_clock::now();
+//	//plot->plot_BlackHole(nParticles, Particles, maxWidth, true);
+//	//auto t2 = std::chrono::high_resolution_clock::now();
+//	//std::cout << "Time for ploting: " << (t2 - t1).count() / 1e6 << " ms." << std::endl;
+//}
 
-	//// Check for kernel launch errors
-	//HANDLE_ERROR(cudaGetLastError());
-	//HANDLE_ERROR(cudaDeviceSynchronize());
+void AccretionDisk::createDiskBMP() {
+	int nBytes = 32;
+	int N = int(std::ceil(std::sqrt(nParticles) / nBytes));
+	if (N < 1)N = 1;
+	DIM = N * nBytes;
+	nParticles = DIM * DIM;
+	std::cout << " N = " << N << " DIM= " << DIM << " nParticles = " << nParticles << std::endl;
+	bitmap = CPUAnimBitmap(BMPDIM, BMPDIM, &data);
+	data.bitmap = &bitmap;
+	std::cout << "Bitmap environment created" << std::endl;
+	
+	HANDLE_ERROR(cudaMalloc((void**)&data.dev_bitmap,
+		bitmap.image_size()));//bitmap.image_size=4*BMPDIM*BMPDIM,
+	std::cout << "Bitmap GPU memory allocated" << std::endl;
 
-	//// Copy data from device (GPU) host (CPU)
-	//HANDLE_ERROR(cudaMemcpy(Particles, ParticlesCuda, nParticles * 8 * sizeof(double), cudaMemcpyDeviceToHost));
+	HANDLE_ERROR(cudaMalloc((void**)&data.dev_particles,
+		bitmap.image_size()));//contains the description of the particles
+	std::cout << "Particles GPU memory allocated" << std::endl;
 
-	//for (int n = 0; n < nParticles; n++) {
-	//	Particles[n * 8 + 4] = std::pow((std::abs(Particles[n * 8 + 4]) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale);//Enhances "contrast"
-	//	Particles[n * 8 + 7] = std::pow((std::abs(Particles[n * 8 + 7]) + minFluxSecundary) / (maxFluxSecundary + minFluxSecundary), powerScale) / 2;//Enhances "contrast"
-	//	//std::cout <<"(x,y): ("<<Particles[n * 8 + 2]<< ", " << Particles[n * 8 + 3] << ") -> Primary Flux " << Particles[n * 8 + 4] << " and Secundary " << Particles[n * 8 + 7] << std::endl;
-	//}
-	//auto t1 = std::chrono::high_resolution_clock::now();
-	//plot->plot_BlackHole(nParticles, Particles, maxWidth, true);
-	//auto t2 = std::chrono::high_resolution_clock::now();
-	//std::cout << "Time for ploting: " << (t2 - t1).count() / 1e6 << " ms." << std::endl;
+	
+}
+
+void AccretionDisk::playBMP() {
+	bitmap.anim_and_exit((void (*)(void*, int))generate_frame,
+		(void (*)(void*))cleanup);
+	return;
 }

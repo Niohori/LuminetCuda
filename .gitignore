@@ -413,5 +413,7 @@ MigrationBackup/
 **/Archives/
 *.txt
 *.csv
+*.lib
+*.dll
 
 

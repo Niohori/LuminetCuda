@@ -29,9 +29,9 @@ int main() {
 	const double radius = 70.0 * bh_mass;//  provide radius value > 6M
 
 	AccretionDisk aDisk(bh_mass, inclination * M_PI / 180, 6 * bh_mass, radius, 10000);//creates disk and makes first calculations
-	while (true) {
-		aDisk.play();
-	}
+	//while (true) {
+		aDisk.playBMP();
+	//}
 	//size_t frame = 1;
 	//auto t1 = std::chrono::high_resolution_clock::now();
 	//auto t2 = std::chrono::high_resolution_clock::now();

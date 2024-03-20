@@ -1040,4 +1040,5 @@ void generate_frame(DataBlock* d, int ticks) {
 // clean up memory allocated on the GPU
 void cleanup(DataBlock* d) {
 	HANDLE_ERROR(cudaFree(d->dev_bitmap));
+	HANDLE_ERROR(cudaFree(d->dev_particles));
 }

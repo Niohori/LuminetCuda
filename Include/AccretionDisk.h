@@ -40,6 +40,10 @@
 #include <math_constants.h>
 #include <cuda_runtime.h>
 #include "cpu_anim.h"
+
+#define BMPDIM 1024
+
+
 #define HANDLE_ERROR(x) \
 { \
 	cudaError_t err = x; \
@@ -74,7 +78,8 @@ public:
 	AccretionDisk(const double&, const double&, const double&, const double&, const int&);
 	~AccretionDisk();
 	void play();
-	void generate_frame(DataBlock* d, int);
+	void playBMP();
+	//void generate_frame(DataBlock* d, int);
 
 public://variables
 	DataBlock   data;
@@ -82,6 +87,7 @@ public://variables
 
 private://methods
 	void createDisk();
+	void createDiskBMP();
 
 private://variables
 	double M;

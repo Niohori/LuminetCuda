@@ -26,8 +26,10 @@ struct CPUAnimBitmap {
     unsigned char    *pixels;
     int     width, height;
     void    *dataBlock;
-    std::function<void(void*, int)> fAnim;
-    std::function<void(void*)> animExit;;
+    void (*fAnim)(void*, int);
+    void (*animExit)(void*);
+    //std::function<void(void*, int)> fAnim;
+    //std::function<void(void*)> animExit;;
     void (*clickDrag)(void*,int,int,int,int);
     int     dragStartX, dragStartY;
     CPUAnimBitmap(){;}
@@ -79,7 +81,8 @@ struct CPUAnimBitmap {
         clickDrag = f;
     }
 
-    void anim_and_exit(std::function<void(void*, int)> f, std::function<void(void*)> e) {
+    /*void anim_and_exit(std::function<void(void*, int)> f, std::function<void(void*)> e) {*/
+    void anim_and_exit(void (*f)(void*, int), void(*e)(void*)) {
         CPUAnimBitmap**   bitmap = get_bitmap_ptr();
         *bitmap = this;
         fAnim = f;
