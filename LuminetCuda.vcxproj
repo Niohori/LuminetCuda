@@ -82,12 +82,10 @@
   <ItemGroup>
     <ClInclude Include="common\cpu_anim.h" />
     <ClInclude Include="Include\AccretionDisk.h" />
-    <ClInclude Include="Include\plotter.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Source\AccretionDisk.cpp" />
     <ClCompile Include="Source\Main.cpp" />
-    <ClCompile Include="Source\plotter.cpp" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="cuda\cuda_kernels.cu" />

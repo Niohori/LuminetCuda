@@ -36,7 +36,6 @@
 #include <string>
 #include <vector>
 #include <numeric>
-#include "plotter.h"
 #include <math_constants.h>
 #include <cuda_runtime.h>
 #include "cpu_anim.h"
@@ -58,8 +57,10 @@
 }
 
 struct DataBlock {
-	double* dev_particles;
-	unsigned char* dev_bitmap;
+	double* dev_box_xy;//[indx] [indy][rPrimary][phiPrimary][rsPrimary][FoPrimary] [rSecundary] [phiSecundary] [rsSecundary] [FoSecundary]->8*BMPDIM*BMPDIM
+	double* dev_box_r_phi_old;//[ind_r] [ind_phi][rPrimary]->1*BMPDIM*BMPDIM
+	double* dev_box_r_phi_now;//[ind_r] [ind_phi][rPrimary]->1*BMPDIM*BMPDIM
+	unsigned char* dev_bitmap;/// [indx] [indy] [Rcolor] [Gcolor] [Bcolor] [alphacolor]->4*BMPDIM*BMPDIM
 	CPUAnimBitmap* bitmap;
 };
 
@@ -68,6 +69,7 @@ struct DataBlock {
 void seedParticles(int, double*, int, const double, const double);
 void compute(int, double*, int, double, double);
 void increment(int, double, double*, int, double, double, double, double, double, double, double);
+void makeDisk(DataBlock*,double,double,double);
 void generate_frame(DataBlock*, int);
 void cleanup(DataBlock*);
 
@@ -77,7 +79,6 @@ public:
 	AccretionDisk(void);
 	AccretionDisk(const double&, const double&, const double&, const double&, const int&);
 	~AccretionDisk();
-	void play();
 	void playBMP();
 	//void generate_frame(DataBlock* d, int);
 
@@ -86,7 +87,6 @@ public://variables
 	CPUAnimBitmap  bitmap;
 
 private://methods
-	void createDisk();
 	void createDiskBMP();
 
 private://variables
@@ -107,10 +107,7 @@ private://variables
 	double powerScale = 0.9;
 	double incr = 1.0;// 5.0 * M_PI / 180.0;
 
-	double* Particles;
-	double* ParticlesCuda;
 
-	Plotter* plot;
 
 	int DIM;
 };

@@ -18,18 +18,12 @@
     <ClInclude Include="Include\AccretionDisk.h">
       <Filter>Include</Filter>
     </ClInclude>
-    <ClInclude Include="Include\plotter.h">
-      <Filter>Include</Filter>
-    </ClInclude>
     <ClInclude Include="common\cpu_anim.h">
       <Filter>Common</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Source\AccretionDisk.cpp">
-      <Filter>Source</Filter>
-    </ClCompile>
-    <ClCompile Include="Source\plotter.cpp">
       <Filter>Source</Filter>
     </ClCompile>
     <ClCompile Include="Source\Main.cpp">

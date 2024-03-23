@@ -28,10 +28,11 @@
 	} \
 }
 
-
 struct DataBlock {
-	double* dev_particles;
-	unsigned char* dev_bitmap;
+	double* dev_box_xy;//[indx] [indy][rPrimary][phiPrimary][rsPrimary][FoPrimary] [rSecundary] [phiSecundary] [rsSecundary] [FoSecundary]->8*BMPDIM*BMPDIM
+	double* dev_box_r_phi_old;//[ind_r] [ind_phi][rPrimary]->1*BMPDIM*BMPDIM
+	double* dev_box_r_phi_now;//[ind_r] [ind_phi][rPrimary]->1*BMPDIM*BMPDIM
+	unsigned char* dev_bitmap;/// [indx] [indy] [Rcolor] [Gcolor] [Bcolor] [alphacolor]->4*BMPDIM*BMPDIM
 	CPUAnimBitmap* bitmap;
 };
 //const int nBytes = 256;
@@ -162,7 +163,7 @@ __device__ double elliptic_f_sin(double u, double m)
 __device__ double elliptic_sn(double u, double m)
 {
 	double snx, cnx, dnx;
-	jacobi_sncndn(u,m, &snx, &cnx, &dnx);
+	jacobi_sncndn(u, m, &snx, &cnx, &dnx);
 	return snx;
 }
 
@@ -692,12 +693,11 @@ __device__ double  redshift_factor(double radius, double angle, double incl, dou
 	return z_factor;
 }
 
-__device__ double  ellipse(double r, double a, double incl) {
+__device__ double  ellipse(double b_, double a, double incl) {
 	double g = acos(cos_gamma(a, incl));
-	double b_ = r * sin(g);
-	return b_;
+	double r = b_ / sin(g);
+	return r;
 }
-
 
 __device__ double findMinimumBisection(double ir_radius, double ir_angle, double bh_mass, double incl, int order, double start, double end) {
 	double y0 = eq13(start, ir_radius, ir_angle, bh_mass, incl, order);;
@@ -706,7 +706,7 @@ __device__ double findMinimumBisection(double ir_radius, double ir_angle, double
 	double p1 = end;
 	double tolerance = 1.0;
 	if (order == 1) {//restrcit search domain for ghostimage
-		p1 =6.0* bh_mass; 
+		p1 = 6.0 * bh_mass;
 		tolerance = 1e-2;
 	}
 	double p0;
@@ -802,67 +802,91 @@ __device__ void  calc_impact_parameter(double& x, double& y, double& b_, double&
 	}
 }
 
-__global__ void computeEllipticIntegralK(double m, double* F_result) {
-	*F_result = K(m);
-}
-__global__ void computeEllipticIntegralFukushima(double theta, double m, double* F_result) {
-	*F_result = F(theta, m);
+__device__ double calc_radius_from_perastion(double periastron, double ir_radius, double ir_angle, double bh_mass, double incl, int n) {
+	double z_inf = zeta_inf(periastron, bh_mass);
+	double q = calc_q(periastron, bh_mass);
+	double m_ = k2(periastron, bh_mass);
+	double ell_inf = F(z_inf, m_);  //incomplete elliptic integral
+	double g = acos(cos_gamma(ir_angle, incl));
+
+	double ellips_arg;
+	if (n) {
+		double ell_k = K(m_);//complete elliptic integral
+		ellips_arg = (g - 2. * n * PI) / (2. * sqrt(periastron / q)) - ell_inf + 2. * ell_k;
+	}
+	else {
+		ellips_arg = g / (2. * sqrt(periastron / q)) + ell_inf;
+	}
+	double snn = elliptic_sn(ellips_arg, m_); //Jacobi elliptic function sn TO CHECK:arguments
+	double term1 = -(q - periastron + 2. * bh_mass) / (4. * bh_mass * periastron);
+	double term2 = ((q - periastron + 6. * bh_mass) / (4. * bh_mass * periastron)) * snn * snn;
+	if (term1 + term2 == 0.0f) {
+		return -1.0f;
+	}
+	else {
+		return 1.0f / (term1 + term2);
+	}
+	return -1.0f;
 }
 
-__global__ void computeIncompleteEllipticIntegralSimple(double theta, double m, double* F_result) {
-	*F_result = IncompleteEllipticIntegralFirstKind(theta, m);
-}
-__global__ void computeCompleteEllipticIntegralSimple(double m, double* F_result) {
-	*F_result = CompleteEllipticIntegralFirstKind(m);
-}
-
-__global__ void computeJacobiSN(double arg, double m, double* F_result) {
-	*F_result = sn(arg, m);
-}
-
-__global__ void computeJacobiSnSimple(double arg, double m, double* F_result) {
-	*F_result = elliptic_f_sin(arg, m);
+__device__ double calc_periastron_from_b(double impactParameter, double bh_mass, double maxradius) {
+	//Viète formulae
+	double p = -impactParameter * impactParameter;
+	double q = 2.0 * impactParameter * impactParameter * bh_mass;
+	if (impactParameter <= 3.0f * sqrt(3.0f) * bh_mass) { return -1.0f; }
+	double periastron = 2.0f * sqrt(-p / 3.0f) * cos(1.0f / 3.0f * acos(3.0f / 2.0f * q / p * sqrt(-3.0f / p)) - 2.0f / 3.0f * PI * 0);
+	//return periastron;
+	if (periastron > 2.0f * bh_mass && periastron < bh_mass * maxradius) { return periastron; }
+	return -1.0f;
 }
 
-void cudaInCompleteEllipticIntegralFukushima(double theta, double k, double* result) {
-	double m = k * k;
-	computeEllipticIntegralFukushima << <1, 1 >> > (theta, m, result);
+__device__ double inline calc_phi_from_alpha(double alpha, double inclination) {
+	double cosphi = cos(alpha) / sqrt(pow(cos(inclination), 2) + pow(cos(alpha), 2) * pow(sin(inclination), 2));
+	return acos(cosphi);
 }
 
-void cudaInCompleteEllipticIntegralSimple(double theta, double k, double* result) {
-	double m = k * k;
-	computeIncompleteEllipticIntegralSimple << <1, 1 >> > (theta, m, result);
+__device__ double inline calc_b_from_xy(int indx, int indy, double outerRadius, double bh_mass) {
+	int center = BMPDIM / 2;
+	double b = 2.0 * sqrt(double((center - indx) * (center - indx) + (center - indy) * (center - indy))) * outerRadius / BMPDIM;
+	//if (b <= 3.0f * sqrt(3.0f) * bh_mass) { b = -1.0f; }//b must be greater then bc= 3sqrt(3)M
+	return b;
 }
 
-void cudaCompleteEllipticIntegralSimple(double k, double* result) {
-	double m = k * k;
-	computeCompleteEllipticIntegralSimple << <1, 1 >> > (m, result);
+__device__ double inline calc_alpha_from_xy(int indx, int indy, int order) {
+	int center = int(BMPDIM / 2);
+	/*if (indy == center && indx == center) { return -1000.0f; }
+	if (indy == center && indx == 0) { return PI / 2.0f; }
+	if (indy == center && indx == BMPDIM - 1) { return 3.0f * PI / 2.0f; }
+	if (indx == center && indy == BMPDIM - 1) { return 0.0f; }
+	if (indx == center && indy == 0) { return PI; }*/
+	double a = atan2(-double(indx - center), double(indy - center)) + (1.0f - order) * PI;
+	//if (a < 0.0f) { a += 2.0f * PI; }
+	return a;
 }
 
-void cudaCompleteEllipticIntegralK(double k, double* result) {
-	double m = k * k;
-	computeEllipticIntegralK << <1, 1 >> > (m, result);
+__device__ void  get_r_phi_index(double r, double phi, double outerRadius, int& ind_r, int& ind_phi) {
+	ind_r = int(round(1.0f * BMPDIM * r / (outerRadius)));
+	ind_phi = int(round(1.0f * BMPDIM * phi / (2.0f * PI)));
+	return;
 }
 
-void cudaJacobiSN(double k, double arg, double* result) {
-	double m = k * k;
-	computeJacobiSN << <1, 1 >> > (arg, m, result);
-	//jacobi_sn_kernel << <1, 1 >> > (arg, k, result);
-}
-
-void cudaJacobiSnSimple(double k, double phi, double* result) {
-	double m = k * k;
-	computeJacobiSnSimple << <1, 1 >> > (phi, m, result);
-	//jacobi_sn_kernel << <1, 1 >> > (arg, k, result);
-}
-
-__global__ void computeCosAlphaCuda(double incl, double* phiParticles, double* angleParticles, int nParticles) {
-	int index = threadIdx.x + blockIdx.x * blockDim.x;
-	//if (index < nParticles) {
-	double phi = phiParticles[index];
-	angleParticles[index] = cos_alpha(phi, incl);
-	//}
-}
+//__device__ double cos_gamma(double alpha, double incl) {
+//	/*
+//----------------------------------------------------------------------------------------------------------------
+//Calculate the cos of the angle gamma
+//----------------------------------------------------------------------------------------------------------------
+//*/
+//	if (fabs(incl) < 1e-2) {
+//		return 0;
+//	}
+//	return cos(alpha) / sqrt(cos(alpha) * cos(alpha) + 1 / (tan(incl) * tan(incl)));  // real
+//}
+//
+//__device__ double ellipse(double r, double a, double incl) {
+//	double g = acos(cos_gamma(a, incl));
+//	double b_ = r * sin(g);
+//	return b_;
+//}
 
 __global__ void computeCuda(double* particles, int nParticles, double inclination, double bh_mass) {
 	//int x = blockIdx.x;
@@ -929,8 +953,8 @@ __global__ void incrementCuda(double increment, double* particles, int nParticle
 		double RsS = redshift_factor(r, alphaS, inclination, bh_mass, bS);
 		double FoP = flux_observed(r, 1e-8, bh_mass, RsP);
 		double FoS = flux_observed(r, 1e-8, bh_mass, RsS);
-		FoP= pow((fabs(FoP) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale);
-		FoS = pow((fabs(FoS) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale);
+		FoP = pow((fabs(FoP) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale);
+		FoS = pow((fabs(FoS) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale)/2.0;
 		particles[offset * 8 + 1] = phi;
 		particles[offset * 8 + 2] = xP;
 		particles[offset * 8 + 3] = -yP;
@@ -967,6 +991,213 @@ __global__ void seedParticlesCuda(double* particles, curandState_t* statesr, cur
 	return;
 }
 
+__global__ void makeDiskCuda(unsigned char* ptrBMP, double* box_xy, double inclination, double bh_mass, double outerRadius) {
+	// map from threadIdx/BlockIdx to pixel position
+	int x = threadIdx.x + blockIdx.x * blockDim.x;
+	int y = threadIdx.y + blockIdx.y * blockDim.y;
+	int offset = x + y * blockDim.x * gridDim.x;
+	double alpha = calc_alpha_from_xy(x, y, 0);
+	double impactParameter = 0.0f;;
+	double phi = 0.0f;
+	double periastron = 0.0f;
+	double radiusPrimary = 0.0f;
+	double radiusSecundary = 0.0f;
+	double redshiftPrimary = 0.0f;
+	double redshiftSecundary = 0.0f;
+	double fluxPrimary = 0.0f;
+	double fluxSecundary = 0.0f;
+	impactParameter = calc_b_from_xy(x, y, outerRadius, bh_mass);
+	phi = calc_phi_from_alpha(alpha, inclination);
+	periastron = calc_periastron_from_b(impactParameter, bh_mass, outerRadius);
+	if (periastron > 0.0f) {
+		double radius = calc_radius_from_perastion(periastron, impactParameter, alpha, bh_mass, inclination, 0);
+		//double radius = ellipse(impactParameter, alpha, inclination);
+		if (radius > 6.0f * bh_mass) {
+			radiusPrimary = radius;
+			redshiftPrimary = redshift_factor(radiusPrimary, alpha, inclination, bh_mass, impactParameter);
+			fluxPrimary = flux_observed(radiusPrimary, 1e-8, bh_mass, redshiftPrimary);
+		}
+		alpha -= PI;
+		radius = calc_radius_from_perastion(periastron, impactParameter, alpha, bh_mass, inclination, 1);
+		if (radius > 6.0f * bh_mass) {
+			radiusSecundary = radius;
+			redshiftSecundary = redshift_factor(radiusSecundary, -alpha, inclination, bh_mass, impactParameter);
+			fluxSecundary = flux_observed(radiusSecundary, 1e-8, bh_mass, redshiftSecundary);
+		}
+	}
+	else {
+		double radius = ellipse(impactParameter, alpha, inclination);
+		if (radius > 6.0f * bh_mass) {
+			radiusPrimary = radius;
+			if (cos(alpha) > 0) {
+				redshiftPrimary = redshift_factor(radiusPrimary, alpha, inclination, bh_mass, impactParameter);
+				fluxPrimary = flux_observed(radiusPrimary, 1e-8, bh_mass, redshiftPrimary);
+			}
+			/*radiusSecundary = radius;
+			redshiftSecundary = redshift_factor(radiusSecundary, alpha, inclination, bh_mass, impactParameter);
+			fluxSecundary = flux_observed(radiusSecundary, 1e-8, bh_mass, redshiftSecundary);*/
+		}
+	}
+	if (radiusPrimary < outerRadius && cos(alpha) <= 0) { fluxSecundary = 0.0f; }//hattrick to render the primary image opaque
+	box_xy[offset * 11 + 0] = radiusPrimary;
+	box_xy[offset * 11 + 1] = phi;
+	box_xy[offset * 11 + 2] = redshiftPrimary;
+	box_xy[offset * 11 + 3] = fluxPrimary;
+	box_xy[offset * 11 + 4] = radiusSecundary;
+	box_xy[offset * 11 + 5] = phi;
+	box_xy[offset * 11 + 6] = redshiftSecundary;
+	box_xy[offset * 11 + 7] = fluxSecundary;
+	box_xy[offset * 11 + 8] = impactParameter;
+	box_xy[offset * 11 + 9] = alpha;
+	box_xy[offset * 11 + 10] = periastron;
+	return;
+}
+
+__global__ void kernel(unsigned char* ptr, int ticks) {
+	// map from threadIdx/BlockIdx to pixel position
+	int x = threadIdx.x + blockIdx.x * blockDim.x;
+	int y = threadIdx.y + blockIdx.y * blockDim.y;
+	int offset = x + y * blockDim.x * gridDim.x;
+
+	// now calculate the value at that position
+	float fx = x - BMPDIM / 2;
+	float fy = y - BMPDIM / 2;
+	float d = sqrtf(fx * fx + fy * fy);
+	unsigned char grey = (unsigned char)(128.0f + 127.0f *
+		cos(d / 10.0f - ticks / 7.0f) /
+		(d / 10.0f + 1.0f));
+	ptr[offset * 4 + 0] = grey;
+	ptr[offset * 4 + 1] = grey;
+	ptr[offset * 4 + 2] = grey;
+	ptr[offset * 4 + 3] = 255;
+}
+
+__global__ void clearBMP(unsigned char* ptr) {
+	// map from threadIdx/BlockIdx to pixel position
+	int x = threadIdx.x + blockIdx.x * blockDim.x;
+	int y = threadIdx.y + blockIdx.y * blockDim.y;
+	int offset = x + y * blockDim.x * gridDim.x;
+
+	ptr[offset * 4 + 0] = 0;
+	ptr[offset * 4 + 1] = 0;
+	ptr[offset * 4 + 2] = 0;
+	ptr[offset * 4 + 3] = 255;
+}
+
+//__global__ void findMinMax(double* array, int n, double* maxVal, double* minVal) {
+//	// Allocate shared memory to store intermediate results
+//	extern __shared__ double sdata[];
+//
+//	unsigned int tid = threadIdx.x;
+//	unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+//
+//	// Load data to shared memory
+//	if (i < n)
+//		sdata[tid] = array[i];
+//	else
+//		sdata[tid] = -INFINITY; // or any value that ensures this element won't be selected as minimum
+//
+//	__syncthreads();
+//
+//	// Reduction in shared memory
+//	for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
+//		if (tid < s) {
+//			sdata[tid] = fmax(sdata[tid], sdata[tid + s]); // Compute maximum
+//			sdata[tid + s] = fmin(sdata[tid], sdata[tid + s]); // Compute minimum
+//		}
+//		__syncthreads();
+//	}
+//
+//	// Write the results back to global memory
+//	if (tid == 0) {
+//		maxVal[blockIdx.x] = sdata[0]; // Store maximum
+//		minVal[blockIdx.x] = sdata[blockDim.x]; // Store minimum
+//	}
+//}
+
+__global__ void normalizeBMP(unsigned char* ptrBMP, double* box_xy, double fminPrimary, double fmaxPrimary, double fminSecundary, double fmaxSecundary) {
+	// map from threadIdx/BlockIdx to pixel position
+	int x = threadIdx.x + blockIdx.x * blockDim.x;
+	int y = threadIdx.y + blockIdx.y * blockDim.y;
+	int offset = x + y * blockDim.x * gridDim.x;
+	double fluxPrimary = box_xy[offset * 11 + 3];
+	double fluxSecundary = box_xy[offset * 11 + 7];
+	double fmax = fmaxPrimary;
+	double fmin = fminPrimary;
+	double flux = fluxPrimary;
+	if (fluxSecundary > flux) {
+		fmax = fmaxSecundary;
+		fmin = fminSecundary;
+		flux = fluxSecundary;
+	}
+	//flux = fluxSecundary;
+	ptrBMP[offset * 4 + 0] = char(255 * flux / (fmax - fmin));
+	ptrBMP[offset * 4 + 1] = char(255 * flux / (fmax - fmin));
+	ptrBMP[offset * 4 + 2] = char(255 * flux / (fmax - fmin));
+	ptrBMP[offset * 4 + 3] = 255;
+}
+
+void makeDisk(DataBlock* d, double inclination, double bh_mass, double outerRadius) {
+	dim3    blocks(BMPDIM / 16, BMPDIM / 16);
+	dim3    threads(16, 16);
+	clearBMP << <blocks, threads >> > (d->dev_bitmap);
+	makeDiskCuda << <blocks, threads >> > (d->dev_bitmap, d->dev_box_xy, inclination, bh_mass, outerRadius);
+	double 	maxFluxPrimary = -1e15;
+	double minFluxPrimary = 1e15;
+	double maxFluxSecundary = -1e15;
+	double minFluxSecundary = 1e15;
+	double powerScale = 0.99;
+	double* host_box_xy = (double*)malloc(11 * BMPDIM * BMPDIM * sizeof(double));
+
+	double 	amax = -1e15;
+	double amin = 1e15;
+
+	HANDLE_ERROR(cudaMemcpy(host_box_xy, d->dev_box_xy, 11 * BMPDIM * BMPDIM * sizeof(double), cudaMemcpyDeviceToHost));
+	for (int n = 0; n < BMPDIM * BMPDIM; n++) {
+		if (amax < host_box_xy[n * 11 + 10]) { amax = host_box_xy[n * 11 + 10]; }
+		if (amin > host_box_xy[n * 11 + 10]) { amin = host_box_xy[n * 11 + 10]; }
+		//std::cout << host_box_xy[n * 8 + 1] << std::endl;
+		if (maxFluxPrimary < host_box_xy[n * 11 + 3]) { maxFluxPrimary = host_box_xy[n * 11 + 3]; }
+		if (minFluxPrimary > host_box_xy[n * 11 + 3]) { minFluxPrimary = host_box_xy[n * 11 + 3]; }
+		if (maxFluxSecundary < host_box_xy[n * 11 + 7]) { maxFluxSecundary = host_box_xy[n * 11 + 7]; }
+		if (minFluxSecundary > host_box_xy[n * 11 + 7]) { minFluxSecundary = host_box_xy[n * 11 + 7]; }
+
+		//std::cout << n << "): Primary Fo: " << host_box_xy[n * 8 + 3] << " Secndary: " << host_box_xy[n * 8 + 7] << std::endl;
+	}
+	std::cout << "Periastron between " << amin << " and " << amax << std::endl;
+	//std::cout << "alpha between " << amin * 180.0f / PI << " and " << amax * 180.0f / PI << std::endl;
+	std::cout << "Primary Flux between " << minFluxPrimary << " and " << maxFluxPrimary << std::endl;
+	std::cout << "Secundary Flux between " << minFluxSecundary << " and " << maxFluxSecundary << std::endl;
+	for (int n = 0; n < BMPDIM * BMPDIM; n++) {
+		host_box_xy[n * 11 + 3] = std::pow((std::abs(host_box_xy[n * 11 + 3]) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale);//Enhances "contrast"
+		host_box_xy[n * 11 + 7] = std::pow((std::abs(host_box_xy[n * 11 + 7]) + minFluxSecundary) / (maxFluxSecundary + minFluxSecundary), powerScale);//Enhances "contrast"
+		//std::cout <<"(x,y): ("<<Particles[n * 8 + 2]<< ", " << Particles[n * 8 + 3] << ") -> Primary Flux " << Particles[n * 8 + 4] << " and Secundary " << Particles[n * 8 + 7] << std::endl;
+	}
+	free(host_box_xy);//free CPU memory
+	normalizeBMP << <blocks, threads >> > (d->dev_bitmap, d->dev_box_xy, minFluxPrimary, maxFluxPrimary, minFluxSecundary, maxFluxSecundary);
+}
+
+void generate_frame(DataBlock* d, int ticks) {
+	dim3    blocks(BMPDIM / 16, BMPDIM / 16);
+	dim3    threads(16, 16);
+	//clearBMP << <blocks, threads >> > (d->dev_bitmap);
+	//kernel << <blocks, threads >> > (d->dev_bitmap, ticks);
+
+	HANDLE_ERROR(cudaMemcpy(d->bitmap->get_ptr(),
+		d->dev_bitmap,
+		d->bitmap->image_size(),
+		cudaMemcpyDeviceToHost));
+}
+
+// clean up memory allocated on the GPU
+void cleanup(DataBlock* d) {
+	HANDLE_ERROR(cudaFree(d->dev_bitmap));
+	HANDLE_ERROR(cudaFree(d->dev_box_xy));
+	HANDLE_ERROR(cudaFree(d->dev_box_r_phi_old));
+	HANDLE_ERROR(cudaFree(d->dev_box_r_phi_now));
+	std::cout << "GPU cleaned" << std::endl;
+}
+
 void seedParticles(int DIM, double* particles, int nParticles, const double innerradius, const double outerradius) {
 	//dim3 grid(DIM, DIM);
 	dim3    blocks(DIM / 16, DIM / 16);
@@ -992,53 +1223,16 @@ void compute(int DIM, double* ParticlesCuda, int nParticles, double inclination,
 	//computeCuda << <grid, 1 >> > (ParticlesCuda, nParticles, inclination, bh_mass);
 	dim3    blocks(DIM / 16, DIM / 16);
 	dim3    threads(16, 16);
-	
+
 	computeCuda << <blocks, threads >> > (ParticlesCuda, nParticles, inclination, bh_mass);
 }
 
-void increment(int DIM, double increment, double* Particles, int nParticles, double minFluxPrimary, double maxFluxPrimary, 
+void increment(int DIM, double increment, double* Particles, int nParticles, double minFluxPrimary, double maxFluxPrimary,
 	double minFluxSecundary, double maxFluxSecundary, double powerScale, double inclination, double bh_mass) {
 	//dim3 grid(DIM, DIM);
 	//computeCuda << <grid, 1 >> > (ParticlesCuda, nParticles, inclination, bh_mass);
 	dim3    blocks(DIM / 16, DIM / 16);
 	dim3    threads(16, 16);
-	incrementCuda << <blocks, threads >> > (increment, Particles, nParticles,  minFluxPrimary,  maxFluxPrimary,
-		 minFluxSecundary,  maxFluxSecundary,  powerScale, inclination, bh_mass);
-}
-
-
-__global__ void kernel(unsigned char* ptr, int ticks) {
-	// map from threadIdx/BlockIdx to pixel position
-	int x = threadIdx.x + blockIdx.x * blockDim.x;
-	int y = threadIdx.y + blockIdx.y * blockDim.y;
-	int offset = x + y * blockDim.x * gridDim.x;
-
-	// now calculate the value at that position
-	float fx = x - BMPDIM / 2;
-	float fy = y - BMPDIM / 2;
-	float d = sqrtf(fx * fx + fy * fy);
-	unsigned char grey = (unsigned char)(128.0f + 127.0f *
-		cos(d / 10.0f - ticks / 7.0f) /
-		(d / 10.0f + 1.0f));
-	ptr[offset * 4 + 0] = grey;
-	ptr[offset * 4 + 1] = grey;
-	ptr[offset * 4 + 2] = grey;
-	ptr[offset * 4 + 3] = 255;
-}
-
-void generate_frame(DataBlock* d, int ticks) {
-	dim3    blocks(BMPDIM / 16,BMPDIM / 16);
-	dim3    threads(16, 16);
-	kernel << <blocks, threads >> > (d->dev_bitmap, ticks);
-
-	HANDLE_ERROR(cudaMemcpy(d->bitmap->get_ptr(),
-		d->dev_bitmap,
-		d->bitmap->image_size(),
-		cudaMemcpyDeviceToHost));
-}
-
-// clean up memory allocated on the GPU
-void cleanup(DataBlock* d) {
-	HANDLE_ERROR(cudaFree(d->dev_bitmap));
-	HANDLE_ERROR(cudaFree(d->dev_particles));
+	incrementCuda << <blocks, threads >> > (increment, Particles, nParticles, minFluxPrimary, maxFluxPrimary,
+		minFluxSecundary, maxFluxSecundary, powerScale, inclination, bh_mass);
 }
