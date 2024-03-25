@@ -1,4 +1,4 @@
-# LuminetCpp
+# LuminetCuda
 Cuda version of C++ version Luminet project.
 Try to animate BH disk.
 Work in progress. Do not use as a lot of  functionalities have to be implemented.

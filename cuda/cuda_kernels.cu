@@ -836,7 +836,7 @@ __device__ double calc_periastron_from_b(double impactParameter, double bh_mass,
 	if (impactParameter <= 3.0f * sqrt(3.0f) * bh_mass) { return -1.0f; }
 	double periastron = 2.0f * sqrt(-p / 3.0f) * cos(1.0f / 3.0f * acos(3.0f / 2.0f * q / p * sqrt(-3.0f / p)) - 2.0f / 3.0f * PI * 0);
 	//return periastron;
-	if (periastron > 2.0f * bh_mass && periastron < bh_mass * maxradius) { return periastron; }
+	if (periastron > 2.0f * bh_mass && periastron < maxradius) { return periastron; }
 	return -1.0f;
 }
 
@@ -868,6 +868,15 @@ __device__ void  get_r_phi_index(double r, double phi, double outerRadius, int& 
 	ind_r = int(round(1.0f * BMPDIM * r / (outerRadius)));
 	ind_phi = int(round(1.0f * BMPDIM * phi / (2.0f * PI)));
 	return;
+}
+
+__device__ double  inline primaryOpacity(double r, double bh_mass, double outerRadius) {
+	double op = 1.0f-1.0f / (outerRadius - 6.0f * bh_mass) * (r - 6.0f * bh_mass);
+	if (op < DBL_EPSILON) { op = 0.0f; }
+	//op = 1.0f;
+	if (r < 6.0f * bh_mass) { return 0.0f; }
+	//if (r > outerRadius) { return 1.0f; }
+	return op;
 }
 
 //__device__ double cos_gamma(double alpha, double incl) {
@@ -954,7 +963,7 @@ __global__ void incrementCuda(double increment, double* particles, int nParticle
 		double FoP = flux_observed(r, 1e-8, bh_mass, RsP);
 		double FoS = flux_observed(r, 1e-8, bh_mass, RsS);
 		FoP = pow((fabs(FoP) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale);
-		FoS = pow((fabs(FoS) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale)/2.0;
+		FoS = pow((fabs(FoS) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale) / 2.0;
 		particles[offset * 8 + 1] = phi;
 		particles[offset * 8 + 2] = xP;
 		particles[offset * 8 + 3] = -yP;
@@ -1006,6 +1015,7 @@ __global__ void makeDiskCuda(unsigned char* ptrBMP, double* box_xy, double incli
 	double redshiftSecundary = 0.0f;
 	double fluxPrimary = 0.0f;
 	double fluxSecundary = 0.0f;
+	double opacity = 0.0f;
 	impactParameter = calc_b_from_xy(x, y, outerRadius, bh_mass);
 	phi = calc_phi_from_alpha(alpha, inclination);
 	periastron = calc_periastron_from_b(impactParameter, bh_mass, outerRadius);
@@ -1038,7 +1048,10 @@ __global__ void makeDiskCuda(unsigned char* ptrBMP, double* box_xy, double incli
 			fluxSecundary = flux_observed(radiusSecundary, 1e-8, bh_mass, redshiftSecundary);*/
 		}
 	}
-	if (radiusPrimary < outerRadius && cos(alpha) <= 0) { fluxSecundary = 0.0f; }//hattrick to render the primary image opaque
+
+	//opacity = primaryOpacity(radiusPrimary, bh_mass, outerRadius);
+	//if (radiusPrimary < outerRadius && cos(alpha) <= 0) { fluxSecundary = 1.0f*fluxPrimary; }//hattrick to render the primary image opaque
+	//if (impactParameter > 6.0f * bh_mass * sin(inclination) && cos(alpha) <= 0) { fluxSecundary = 0.0f * fluxPrimary; }//hattrick to render the primary image opaque
 	box_xy[offset * 11 + 0] = radiusPrimary;
 	box_xy[offset * 11 + 1] = phi;
 	box_xy[offset * 11 + 2] = redshiftPrimary;
@@ -1048,28 +1061,9 @@ __global__ void makeDiskCuda(unsigned char* ptrBMP, double* box_xy, double incli
 	box_xy[offset * 11 + 6] = redshiftSecundary;
 	box_xy[offset * 11 + 7] = fluxSecundary;
 	box_xy[offset * 11 + 8] = impactParameter;
-	box_xy[offset * 11 + 9] = alpha;
+	box_xy[offset * 11 + 9] = primaryOpacity(radiusPrimary, bh_mass, outerRadius);
 	box_xy[offset * 11 + 10] = periastron;
 	return;
-}
-
-__global__ void kernel(unsigned char* ptr, int ticks) {
-	// map from threadIdx/BlockIdx to pixel position
-	int x = threadIdx.x + blockIdx.x * blockDim.x;
-	int y = threadIdx.y + blockIdx.y * blockDim.y;
-	int offset = x + y * blockDim.x * gridDim.x;
-
-	// now calculate the value at that position
-	float fx = x - BMPDIM / 2;
-	float fy = y - BMPDIM / 2;
-	float d = sqrtf(fx * fx + fy * fy);
-	unsigned char grey = (unsigned char)(128.0f + 127.0f *
-		cos(d / 10.0f - ticks / 7.0f) /
-		(d / 10.0f + 1.0f));
-	ptr[offset * 4 + 0] = grey;
-	ptr[offset * 4 + 1] = grey;
-	ptr[offset * 4 + 2] = grey;
-	ptr[offset * 4 + 3] = 255;
 }
 
 __global__ void clearBMP(unsigned char* ptr) {
@@ -1122,18 +1116,16 @@ __global__ void normalizeBMP(unsigned char* ptrBMP, double* box_xy, double fminP
 	int offset = x + y * blockDim.x * gridDim.x;
 	double fluxPrimary = box_xy[offset * 11 + 3];
 	double fluxSecundary = box_xy[offset * 11 + 7];
-	double fmax = fmaxPrimary;
-	double fmin = fminPrimary;
-	double flux = fluxPrimary;
-	if (fluxSecundary > flux) {
-		fmax = fmaxSecundary;
-		fmin = fminSecundary;
-		flux = fluxSecundary;
-	}
-	//flux = fluxSecundary;
-	ptrBMP[offset * 4 + 0] = char(255 * flux / (fmax - fmin));
-	ptrBMP[offset * 4 + 1] = char(255 * flux / (fmax - fmin));
-	ptrBMP[offset * 4 + 2] = char(255 * flux / (fmax - fmin));
+	double flux = fluxPrimary / (fmaxPrimary - fminPrimary);
+	double opacity = box_xy[offset * 11 + 9];
+	//if (fluxSecundary > flux) {
+	//	flux = fluxSecundary / (fmaxSecundary - fminSecundary);;
+	//}
+	//flux = opacity*fluxPrimary / (fmaxPrimary - fminPrimary)+ (1.0f-opacity)*fluxSecundary / (fmaxSecundary - fminSecundary);
+	flux = (opacity * fluxPrimary + (1.0f - opacity) * fluxSecundary) / (fmaxPrimary - fminPrimary);
+	ptrBMP[offset * 4 + 0] = char(255 * flux);
+	ptrBMP[offset * 4 + 1] = char(255 * flux);
+	ptrBMP[offset * 4 + 2] = char(255 * flux);
 	ptrBMP[offset * 4 + 3] = 255;
 }
 
@@ -1158,9 +1150,9 @@ void makeDisk(DataBlock* d, double inclination, double bh_mass, double outerRadi
 		if (amin > host_box_xy[n * 11 + 10]) { amin = host_box_xy[n * 11 + 10]; }
 		//std::cout << host_box_xy[n * 8 + 1] << std::endl;
 		if (maxFluxPrimary < host_box_xy[n * 11 + 3]) { maxFluxPrimary = host_box_xy[n * 11 + 3]; }
-		if (minFluxPrimary > host_box_xy[n * 11 + 3]) { minFluxPrimary = host_box_xy[n * 11 + 3]; }
+		if (minFluxPrimary > host_box_xy[n * 11 + 3] && host_box_xy[n * 11 + 3] > DBL_EPSILON) { minFluxPrimary = host_box_xy[n * 11 + 3]; }
 		if (maxFluxSecundary < host_box_xy[n * 11 + 7]) { maxFluxSecundary = host_box_xy[n * 11 + 7]; }
-		if (minFluxSecundary > host_box_xy[n * 11 + 7]) { minFluxSecundary = host_box_xy[n * 11 + 7]; }
+		if (minFluxSecundary > host_box_xy[n * 11 + 7] && host_box_xy[n * 11 + 7] > DBL_EPSILON) { minFluxSecundary = host_box_xy[n * 11 + 7]; }
 
 		//std::cout << n << "): Primary Fo: " << host_box_xy[n * 8 + 3] << " Secndary: " << host_box_xy[n * 8 + 7] << std::endl;
 	}
@@ -1170,7 +1162,7 @@ void makeDisk(DataBlock* d, double inclination, double bh_mass, double outerRadi
 	std::cout << "Secundary Flux between " << minFluxSecundary << " and " << maxFluxSecundary << std::endl;
 	for (int n = 0; n < BMPDIM * BMPDIM; n++) {
 		host_box_xy[n * 11 + 3] = std::pow((std::abs(host_box_xy[n * 11 + 3]) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale);//Enhances "contrast"
-		host_box_xy[n * 11 + 7] = std::pow((std::abs(host_box_xy[n * 11 + 7]) + minFluxSecundary) / (maxFluxSecundary + minFluxSecundary), powerScale);//Enhances "contrast"
+		host_box_xy[n * 11 + 7] = std::pow((std::abs(host_box_xy[n * 11 + 7]) + minFluxSecundary) / (maxFluxSecundary + minFluxSecundary), powerScale)/1.0f;//Enhances "contrast"
 		//std::cout <<"(x,y): ("<<Particles[n * 8 + 2]<< ", " << Particles[n * 8 + 3] << ") -> Primary Flux " << Particles[n * 8 + 4] << " and Secundary " << Particles[n * 8 + 7] << std::endl;
 	}
 	free(host_box_xy);//free CPU memory
