@@ -1118,9 +1118,9 @@ __device__ void  wavelength_to_rgb(double wavelength, double& R, double& G, doub
 		B = 0.0;
 	}
 	else {
-		R = 1.0;
-		G = 1.0;
-		B = 1.0;
+		R = 255.0/256.0;
+		G = 215.0/256.0;
+		B = 0.0;
 	}
 
 	return;
@@ -1328,8 +1328,8 @@ __global__ void clearBMP(unsigned char* ptr) {
 	int y = threadIdx.y + blockIdx.y * blockDim.y;
 	int offset = x + y * blockDim.x * gridDim.x;
 
-	ptr[offset * 4 + 0] = 0;
-	ptr[offset * 4 + 1] = 0;
+	ptr[offset * 4 + 0] = 255;
+	ptr[offset * 4 + 1] = 215;
 	ptr[offset * 4 + 2] = 0;
 	ptr[offset * 4 + 3] = 255;
 }
