@@ -16,21 +16,20 @@
 #include <BlackHolePhysics.h>
 #include "AccretionDisk.h"
 
-
  //clean up memory allocated on the GPU
 //void cleanup(DataBlock* d) {
 //	HANDLE_ERROR(cudaFree(d->dev_bitmap));
 //}
 
 int main() {
-	const double inclination = 80.0;
+	const double inclination = 85.0;
 
-	const double bh_mass = 1.;// provide black hole mass value
-	const double radius =30.0 * bh_mass;//  provide radius value > 6M
+	const double bh_mass = 1.0;// provide black hole mass value
+	const double radius = 30.0 * bh_mass;//  provide radius value > 6M
 
 	AccretionDisk aDisk(bh_mass, inclination * M_PI / 180, 6 * bh_mass, radius, 10000);//creates disk and makes first calculations
 	//while (true) {
-		aDisk.playBMP(bh_mass,radius);
+	aDisk.playBMP(bh_mass, radius);
 	//}
 	//size_t frame = 1;
 	//auto t1 = std::chrono::high_resolution_clock::now();
