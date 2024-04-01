@@ -23,14 +23,14 @@
 //}
 
 int main() {
-	const double inclination = 100;
+	const double inclination = 80.0;
 
 	const double bh_mass = 1.;// provide black hole mass value
 	const double radius =30.0 * bh_mass;//  provide radius value > 6M
 
 	AccretionDisk aDisk(bh_mass, inclination * M_PI / 180, 6 * bh_mass, radius, 10000);//creates disk and makes first calculations
 	//while (true) {
-		aDisk.playBMP();
+		aDisk.playBMP(bh_mass,radius);
 	//}
 	//size_t frame = 1;
 	//auto t1 = std::chrono::high_resolution_clock::now();

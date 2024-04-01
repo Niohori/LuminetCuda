@@ -42,14 +42,13 @@ void AccretionDisk::createDiskBMP() {
 	std::cout << "Bitmap GPU memory allocated" << std::endl;
 
 	HANDLE_ERROR(cudaMalloc((void**)&data.dev_box_xy, 11 * BMPDIM * BMPDIM * sizeof(double)));//8
-	HANDLE_ERROR(cudaMalloc((void**)&data.dev_box_r_phi_old, 1 * BMPDIM * BMPDIM * sizeof(double)));
-	HANDLE_ERROR(cudaMalloc((void**)&data.dev_box_r_phi_now, 1 * BMPDIM * BMPDIM * sizeof(double)));
+	HANDLE_ERROR(cudaMalloc((void**)&data.dev_BHDisk,1 * BMPDIM * BMPDIM * sizeof(double)));
 	std::cout << "Particles GPU memory allocated" << std::endl;
 	makeDisk(&data, inclination,  M,outerRadius);
 
 }
 
-void AccretionDisk::playBMP() {
+void AccretionDisk::playBMP(double bh_mass, double outerRadius) {
 	std::cout << "Press ESC to stop animation ." << std::endl;
 	//HANDLE_ERROR(cudaMemcpy(data.bitmap->get_ptr(),
 	//	data.dev_bitmap,

@@ -28,10 +28,16 @@
 	} \
 }
 
+//__device__ double devmaxFluxPrimary;// = -1e15;
+//__device__ double devminFluxPrimary;// = 1e15;
+//__device__ double devmaxFluxSecundary;// = -1e15;
+//__device__ double devminFluxSecundary;// = 1e15;
+//__device__ double devBHMass;
+//__device__ double devBHRadius;
+
 struct DataBlock {
-	double* dev_box_xy;//[indx] [indy][rPrimary][phiPrimary][rsPrimary][FoPrimary] [rSecundary] [phiSecundary] [rsSecundary] [FoSecundary]->8*BMPDIM*BMPDIM
-	double* dev_box_r_phi_old;//[ind_r] [ind_phi][rPrimary]->1*BMPDIM*BMPDIM
-	double* dev_box_r_phi_now;//[ind_r] [ind_phi][rPrimary]->1*BMPDIM*BMPDIM
+	double* dev_box_xy;//[indx] [indy][rPrimary][phiPrimary][rsPrimary][FoPrimary] [rSecundary] [phiSecundary] [rsSecundary] [FoSecundary][impactParameter][opacity][free]->11*BMPDIM*BMPDIM
+	double* dev_BHDisk;//[ind_r] [ind_phi][wavelength]->1*BMPDIM*BMPDIM
 	unsigned char* dev_bitmap;/// [indx] [indy] [Rcolor] [Gcolor] [Bcolor] [alphacolor]->4*BMPDIM*BMPDIM
 	CPUAnimBitmap* bitmap;
 };
@@ -840,9 +846,31 @@ __device__ double calc_periastron_from_b(double impactParameter, double bh_mass,
 	return -1.0f;
 }
 
-__device__ double inline calc_phi_from_alpha(double alpha, double inclination) {
-	double cosphi = cos(alpha) / sqrt(pow(cos(inclination), 2) + pow(cos(alpha), 2) * pow(sin(inclination), 2));
-	return acos(cosphi);
+//__device__ double inline calc_phi_from_alpha(double alpha, double inclination) {
+//	double cosphi = cos(alpha) / sqrt(pow(cos(inclination), 2) + pow(cos(alpha), 2) * pow(sin(inclination), 2));
+//	return acos(cosphi);
+//}
+
+__device__ double inline calc_phi_from_alpha(double alpha, double inclination, unsigned order) {
+	double phi = acos(cos(alpha) / sqrt(pow(cos(inclination), 2) + pow(cos(alpha), 2) * pow(sin(inclination), 2)));
+	if (order == 0) {
+		if (sin(alpha) > 0.0f) {
+			return phi;
+		}
+		else {
+			return 2.0f * PI - phi;
+		}
+	}
+	else
+	{
+		if (sin(alpha) > 0.0f) {
+			return 2.0f * PI - phi;;
+		}
+		else {
+			return  phi;
+		}
+	}
+	return 0.0f;
 }
 
 __device__ double inline calc_b_from_xy(int indx, int indy, double outerRadius, double bh_mass) {
@@ -865,17 +893,25 @@ __device__ double inline calc_alpha_from_xy(int indx, int indy, int order) {
 }
 
 __device__ void  get_r_phi_index(double r, double phi, double outerRadius, int& ind_r, int& ind_phi) {
-	ind_r = int(round(1.0f * BMPDIM * r / (outerRadius)));
-	ind_phi = int(round(1.0f * BMPDIM * phi / (2.0f * PI)));
+	ind_r = int(round(1.0f * (BMPDIM - 1) * r / (outerRadius)));
+	ind_phi = int(round(1.0f * (BMPDIM - 1) * phi / (2.0f * PI)));
+	return;
+}
+__device__ void  get_x_y_index(double r, double phi, double outerRadius, int& ind_x, int& ind_y) {
+	ind_x = int(round(double(BMPDIM)/2.0f * r / (outerRadius)*cos(phi))+ double(BMPDIM) / 2.0f);
+	ind_y = int(round(double(BMPDIM) / 2.0f * r / (outerRadius)*sin(phi)) + double(BMPDIM) / 2.0f);
 	return;
 }
 
+
 __device__ double  inline primaryOpacity(double r, double bh_mass, double outerRadius) {
-	double op = 1.0f-1.0f / (outerRadius - 6.0f * bh_mass) * (r - 6.0f * bh_mass);
-	if (op < DBL_EPSILON) { op = 0.0f; }
+
 	//op = 1.0f;
 	if (r < 6.0f * bh_mass) { return 0.0f; }
-	//if (r > outerRadius) { return 1.0f; }
+	if (r > outerRadius) { return 0.0f; }
+	double op = 1.0f - (r - 6.0f * bh_mass) / (outerRadius - 6.0f * bh_mass);
+	//op = (outerRadius * outerRadius - 6.0f * bh_mass * 6.0f * bh_mass) - (r * r - 6.0f * bh_mass * 6.0f * bh_mass)/ (outerRadius * outerRadius - 6.0f * bh_mass * 6.0f * bh_mass);
+	if (op < DBL_EPSILON) { op = 0.0f; }
 	return op;
 }
 
@@ -999,15 +1035,174 @@ __global__ void seedParticlesCuda(double* particles, curandState_t* statesr, cur
 	}
 	return;
 }
+__device__ double generate_random(curandState* globalState, int threadId) {
+	// Each thread gets a different seed, based on its thread ID
+	curandState localState = globalState[threadId];
 
-__global__ void makeDiskCuda(unsigned char* ptrBMP, double* box_xy, double inclination, double bh_mass, double outerRadius) {
+	// Generate random number
+	double wavelength = curand_uniform(&localState);
+	//wavelength = 380.f + wavelength * (750.0f - 380.0f);
+	// Store the updated state back to global memory
+	globalState[threadId] = localState;
+
+	return wavelength;
+}
+
+__device__ double wavelength(double r, double phi) {
+	double lambda_0 = 380.0f;
+	double lambda_tru = lambda_0*pow(r/10.0f,0.75f);
+	double epsilon = 0.1f;
+	double perturbation = cos(phi* r);
+	return lambda_tru*(1.0f+epsilon* perturbation);
+}
+
+__device__ double spiralWavelength(double r, double phi) {
+	double lambda_0 = 650.0f;
+	double d_lambda = 250.0f;
+	double spiral_a = 0.0f;
+	double spiral_b = 18.0f / PI;
+	if (phi < 0) {
+		phi += PI;
+	}
+	double spiral_par = r - (spiral_a + spiral_b * phi);
+	double lambda_tru = lambda_0 - d_lambda * exp(-fabs(spiral_par) / 1.5);
+	return lambda_tru;
+}
+
+__device__ void  wavelength_to_rgb(double wavelength, double& R, double& G, double& B, double gamma) {
+	if (wavelength < 380 || gamma < DBL_EPSILON) {
+		wavelength = 380.0;
+		R = 0.0f;
+		G = 0.0f;
+		B = 0.0f;
+		return;
+	}
+
+	if (wavelength > 750 || gamma < DBL_EPSILON) {
+		wavelength = 750.0;
+		R = 0.0f;
+		G = 0.0f;
+		B = 0.0f;
+		return;
+	}
+
+	if (wavelength >= 380 && wavelength <= 440) {
+		double attenuation = 0.3 + 0.7 * (wavelength - 380) / (440 - 380);
+		R = pow((-(wavelength - 440) / (440 - 380)) * attenuation, gamma);
+		G = 0.0;
+		B = pow((1.0 * attenuation), gamma);
+	}
+	else if (wavelength >= 440 && wavelength <= 490) {
+		R = 0.0;
+		G = pow(((wavelength - 440) / (490 - 440)), gamma);
+		B = 1.0;
+	}
+	else if (wavelength >= 490 && wavelength <= 510) {
+		R = 0.0;
+		G = 1.0;
+		B = pow((-(wavelength - 510) / (510 - 490)), gamma);
+	}
+	else if (wavelength >= 510 && wavelength <= 580) {
+		R = pow(((wavelength - 510) / (580 - 510)), gamma);
+		G = 1.0;
+		B = 0.0;
+	}
+	else if (wavelength >= 580 && wavelength <= 645) {
+		R = 1.0;
+		G = pow((-(wavelength - 645) / (645 - 580)), gamma);
+		B = 0.0;
+	}
+	else if (wavelength >= 645 && wavelength <= 750) {
+		double attenuation = 0.3 + 0.7 * (750 - wavelength) / (750 - 645);
+		R = pow((1.0 * attenuation), gamma);
+		G = 0.0;
+		B = 0.0;
+	}
+	else {
+		R = 0.0;
+		G = 0.0;
+		B = 0.0;
+	}
+
+	return;
+}
+
+__global__ void incrementDiskCuda(int ticks, unsigned char* ptrBMP, double* dev_BHDisk, double* box_xy, int dim) {
+	// map from threadIdx/BlockIdx to pixel position
+	int x = threadIdx.x + blockIdx.x * blockDim.x;
+	int y = threadIdx.y + blockIdx.y * blockDim.y;
+	int offset = x + y * blockDim.x * gridDim.x;
+	double radiusPrimary = box_xy[offset * 11 + 0];
+	double radiusSecundary = box_xy[offset * 11 + 4];;
+	double phiPrimary = box_xy[offset * 11 + 1];
+	double phiSecundary = box_xy[offset * 11 + 5];
+	double fluxPrimary = box_xy[offset * 11 + 3];;
+	double fluxSecundary = box_xy[offset * 11 + 7];;
+	double opacity = box_xy[offset * 11 + 9];
+	double devBHMass = 1.0f;
+	double devBHRadius = 30.0f;
+	double deltaPhiPrimary = 0.0;
+	if (radiusPrimary > DBL_EPSILON) {
+		deltaPhiPrimary = sqrt(devBHMass / pow(radiusPrimary, 3)) / radiusPrimary;
+	}
+	double deltaPhiSecundary = 0.0;
+	if (radiusSecundary > DBL_EPSILON) {
+		deltaPhiSecundary = sqrt(devBHMass / pow(radiusSecundary, 3)) / radiusSecundary;
+	}
+	double deltaT = 1.0f;
+	double phiPrimaryNew = phiPrimary + deltaPhiPrimary * deltaT * ticks * 1.0f;
+	double phiSecundaryNew = phiSecundary - deltaPhiSecundary * deltaT * ticks * 1.0f;
+	if (phiPrimaryNew > 2.0 * PI) { phiPrimaryNew -= 2.0 * PI; }
+	if (phiSecundaryNew < 0.0 * PI) { phiSecundaryNew += 2.0 * PI; }
+	int indRPrimary = 0;
+	int indPhiPrimary = 0;
+	int indRSecundary = 0;
+	int indPhiSecundary = 0;
+	get_x_y_index(radiusPrimary, phiPrimaryNew, devBHRadius, indRPrimary, indPhiPrimary);
+	get_x_y_index(radiusSecundary, phiSecundaryNew, devBHRadius, indRSecundary, indPhiSecundary);
+	double waveLength = 0.0f;
+	double waveLengthPrimary = 0.0f;
+	double waveLengthSecundary = 0.0f;
+	waveLengthPrimary = dev_BHDisk[indPhiPrimary + indRPrimary * dim];
+	waveLengthSecundary = dev_BHDisk[indPhiSecundary + indRSecundary * dim];
+	double flux = 0.0f;
+	double R = 0.0f;
+	double G = 0.0f;;
+	double B = 0.0f;
+	double minWL = 550.0f;// 380.0f;
+	//waveLengthPrimary = spiralWavelength(radiusPrimary, phiPrimaryNew);
+	//waveLengthSecundary = spiralWavelength(radiusSecundary, phiSecundaryNew);
+	//waveLengthPrimary = wavelength(radiusPrimary, phiPrimaryNew);
+	//waveLengthSecundary = wavelength(radiusSecundary, phiSecundaryNew);
+	if (waveLengthSecundary >= minWL) {
+		//waveLength = minWL + waveLengthSecundary * (750.0f - minWL);
+		waveLength = waveLengthSecundary;
+		flux = (opacity * fluxPrimary + (1.0f - opacity) * fluxSecundary);
+		wavelength_to_rgb(waveLength, R, G, B, 1.0);
+	}
+	if (waveLengthPrimary >= minWL) {
+		//waveLength = minWL + waveLengthPrimary * (750.0f - minWL);
+		waveLength = waveLengthPrimary;
+		flux = (opacity * fluxPrimary + (1.0f - opacity) * fluxSecundary);
+		wavelength_to_rgb(waveLength, R, G, B, 1.0);
+	}
+	//flux = fluxSecundary;//TEMPORARY
+	ptrBMP[offset * 4 + 0] = unsigned  char(int(255 * R * flux));
+	ptrBMP[offset * 4 + 1] = unsigned char(int(255 * G * flux));
+	ptrBMP[offset * 4 + 2] = unsigned char(int(255 * B * flux));
+	ptrBMP[offset * 4 + 3] = unsigned char(255);
+
+	return;
+}
+__global__ void makeDiskCuda(double* dev_BHDisk, double* box_xy, double inclination, double bh_mass, double outerRadius, int dim, curandState* globalState) {
 	// map from threadIdx/BlockIdx to pixel position
 	int x = threadIdx.x + blockIdx.x * blockDim.x;
 	int y = threadIdx.y + blockIdx.y * blockDim.y;
 	int offset = x + y * blockDim.x * gridDim.x;
 	double alpha = calc_alpha_from_xy(x, y, 0);
-	double impactParameter = 0.0f;;
-	double phi = 0.0f;
+	double impactParameter = 0.0f;
+	double phiPrimary = 0.0f;
+	double phiSecundary = 0.0f;
 	double periastron = 0.0f;
 	double radiusPrimary = 0.0f;
 	double radiusSecundary = 0.0f;
@@ -1017,26 +1212,31 @@ __global__ void makeDiskCuda(unsigned char* ptrBMP, double* box_xy, double incli
 	double fluxSecundary = 0.0f;
 	double opacity = 0.0f;
 	impactParameter = calc_b_from_xy(x, y, outerRadius, bh_mass);
-	phi = calc_phi_from_alpha(alpha, inclination);
 	periastron = calc_periastron_from_b(impactParameter, bh_mass, outerRadius);
+	phiPrimary = calc_phi_from_alpha(alpha, inclination, 0);
+	phiSecundary = calc_phi_from_alpha(alpha, inclination, 1);
+	double radius = 0.0f;
 	if (periastron > 0.0f) {
-		double radius = calc_radius_from_perastion(periastron, impactParameter, alpha, bh_mass, inclination, 0);
-		//double radius = ellipse(impactParameter, alpha, inclination);
-		if (radius > 6.0f * bh_mass) {
+		radius = calc_radius_from_perastion(periastron, impactParameter, alpha, bh_mass, inclination, 0);
+
+		if (radius > 6.0f * bh_mass&&radius <= outerRadius) {
 			radiusPrimary = radius;
 			redshiftPrimary = redshift_factor(radiusPrimary, alpha, inclination, bh_mass, impactParameter);
+			//redshiftPrimary = 1.0f;
 			fluxPrimary = flux_observed(radiusPrimary, 1e-8, bh_mass, redshiftPrimary);
 		}
 		alpha -= PI;
+
 		radius = calc_radius_from_perastion(periastron, impactParameter, alpha, bh_mass, inclination, 1);
-		if (radius > 6.0f * bh_mass) {
+		if (radius > 6.0f * bh_mass && radius <= outerRadius) {
 			radiusSecundary = radius;
 			redshiftSecundary = redshift_factor(radiusSecundary, -alpha, inclination, bh_mass, impactParameter);
+			//redshiftSecundary = 1.0f;
 			fluxSecundary = flux_observed(radiusSecundary, 1e-8, bh_mass, redshiftSecundary);
 		}
 	}
 	else {
-		double radius = ellipse(impactParameter, alpha, inclination);
+		radius = ellipse(impactParameter, alpha, inclination);
 		if (radius > 6.0f * bh_mass) {
 			radiusPrimary = radius;
 			if (cos(alpha) > 0) {
@@ -1049,20 +1249,55 @@ __global__ void makeDiskCuda(unsigned char* ptrBMP, double* box_xy, double incli
 		}
 	}
 
-	//opacity = primaryOpacity(radiusPrimary, bh_mass, outerRadius);
-	//if (radiusPrimary < outerRadius && cos(alpha) <= 0) { fluxSecundary = 1.0f*fluxPrimary; }//hattrick to render the primary image opaque
-	//if (impactParameter > 6.0f * bh_mass * sin(inclination) && cos(alpha) <= 0) { fluxSecundary = 0.0f * fluxPrimary; }//hattrick to render the primary image opaque
+	double waveLengthPrimary = curand_uniform(&globalState[offset]);
+	double minWL = 550.0f;// 380.0f;
+	waveLengthPrimary = minWL + waveLengthPrimary * (750.0f - minWL);
+	waveLengthPrimary = 600.0f;
+	if (radiusPrimary > outerRadius) {
+		radiusPrimary = 0.0;
+		redshiftPrimary = 0.0;
+		fluxPrimary = 0.0;
+	}
+	//if (fluxPrimary < DBL_EPSILON) { waveLengthPrimary = 0.0f; }
+	//if (fluxSecundary < DBL_EPSILON) { waveLengthSecundary = 0.0f; }
+	if (radiusSecundary > outerRadius) {
+		radiusSecundary = 0.0;
+		redshiftSecundary = 0.0;
+		fluxSecundary = 0.0;
+	}
 	box_xy[offset * 11 + 0] = radiusPrimary;
-	box_xy[offset * 11 + 1] = phi;
-	box_xy[offset * 11 + 2] = redshiftPrimary;
+	box_xy[offset * 11 + 1] = phiPrimary;
+	box_xy[offset * 11 + 2] = waveLengthPrimary;// redshiftPrimary;
 	box_xy[offset * 11 + 3] = fluxPrimary;
 	box_xy[offset * 11 + 4] = radiusSecundary;
-	box_xy[offset * 11 + 5] = phi;
-	box_xy[offset * 11 + 6] = redshiftSecundary;
+	box_xy[offset * 11 + 5] = phiSecundary;
+	box_xy[offset * 11 + 6] = waveLengthPrimary;// redshiftSecundary;
 	box_xy[offset * 11 + 7] = fluxSecundary;
 	box_xy[offset * 11 + 8] = impactParameter;
 	box_xy[offset * 11 + 9] = primaryOpacity(radiusPrimary, bh_mass, outerRadius);
 	box_xy[offset * 11 + 10] = periastron;
+	int indRP = 0;
+	int indPhiP = 0;
+	int indRS = 0;
+	int indPhiS = 0;
+	int indR = 0;
+	int indPhi = 0;
+
+	get_x_y_index(radiusPrimary, phiPrimary, outerRadius, indRP, indPhiP);
+	get_x_y_index(radiusSecundary, phiSecundary, outerRadius, indRS, indPhiS);
+	box_xy[offset * 11 + 8] = indRP;
+	box_xy[offset * 11 + 10] = indPhiP;
+	//dev_BHDisk[indPhiP + indRP * dim] = 0.0f;
+	//dev_BHDisk[indPhiS + indRS * dim] = 0.0f;
+
+	//if (fluxSecundary > 0.0f) {
+	//	dev_BHDisk[indPhiS + indRS * dim] = 700.f;//waveLengthPrimary;//x;
+	//	//return;
+	//}
+	if (fluxPrimary > 0.0f) {
+		dev_BHDisk[indPhiP + indRP * dim] = waveLengthPrimary;//x;
+		//return;
+	}
 	return;
 }
 
@@ -1076,6 +1311,15 @@ __global__ void clearBMP(unsigned char* ptr) {
 	ptr[offset * 4 + 1] = 0;
 	ptr[offset * 4 + 2] = 0;
 	ptr[offset * 4 + 3] = 255;
+}
+
+__global__ void fillBHDisk(double* dev_BHDisk) {
+	// map from threadIdx/BlockIdx to pixel position
+	int x = threadIdx.x + blockIdx.x * blockDim.x;
+	int y = threadIdx.y + blockIdx.y * blockDim.y;
+	int offset = x + y * blockDim.x * gridDim.x;
+
+	dev_BHDisk[offset] = 0.0f;
 }
 
 //__global__ void findMinMax(double* array, int n, double* maxVal, double* minVal) {
@@ -1109,84 +1353,156 @@ __global__ void clearBMP(unsigned char* ptr) {
 //	}
 //}
 
-__global__ void normalizeBMP(unsigned char* ptrBMP, double* box_xy, double fminPrimary, double fmaxPrimary, double fminSecundary, double fmaxSecundary) {
+__global__ void normalizeBMP(unsigned char* ptrBMP, double* box_xy, double fminPrimary, double fmaxPrimary, double fminSecundary, double fmaxSecundary, double powerScale) {
 	// map from threadIdx/BlockIdx to pixel position
 	int x = threadIdx.x + blockIdx.x * blockDim.x;
 	int y = threadIdx.y + blockIdx.y * blockDim.y;
 	int offset = x + y * blockDim.x * gridDim.x;
+
+	double opacity = box_xy[offset * 11 + 9];
+	double waveLengthPrimary = box_xy[offset * 11 + 2];
+	double waveLengthSecundary = box_xy[offset * 11 + 6];
+	//box_xy[offset * 11 + 3] = pow((fabs(box_xy[offset * 11 + 3] * box_xy[offset * 11 + 2]) + fminPrimary) / (fmaxPrimary + fminPrimary), powerScale) ;//Enhances "contrast"
+	//box_xy[offset * 11 + 7] = pow((fabs(box_xy[offset * 11 + 7] * box_xy[offset * 11 + 6]) + fminSecundary) / (fmaxSecundary + fminSecundary), powerScale)  / 1.0f;//Enhances "contrast"
+	box_xy[offset * 11 + 3] /= (fmaxPrimary - fminPrimary);
+	box_xy[offset * 11 + 7] /= (fmaxSecundary - fminSecundary);
 	double fluxPrimary = box_xy[offset * 11 + 3];
 	double fluxSecundary = box_xy[offset * 11 + 7];
-	double flux = fluxPrimary / (fmaxPrimary - fminPrimary);
-	double opacity = box_xy[offset * 11 + 9];
-	//if (fluxSecundary > flux) {
-	//	flux = fluxSecundary / (fmaxSecundary - fminSecundary);;
-	//}
-	//flux = opacity*fluxPrimary / (fmaxPrimary - fminPrimary)+ (1.0f-opacity)*fluxSecundary / (fmaxSecundary - fminSecundary);
-	flux = (opacity * fluxPrimary + (1.0f - opacity) * fluxSecundary) / (fmaxPrimary - fminPrimary);
-	ptrBMP[offset * 4 + 0] = char(255 * flux);
-	ptrBMP[offset * 4 + 1] = char(255 * flux);
-	ptrBMP[offset * 4 + 2] = char(255 * flux);
-	ptrBMP[offset * 4 + 3] = 255;
+	double flux = fluxPrimary;
+	flux = (opacity * fluxPrimary + (1.0f - opacity) * fluxSecundary);// / (fmaxPrimary - fminPrimary);
+	double R, G, B;
+	wavelength_to_rgb(waveLengthPrimary, R, G, B, 1.0);
+	ptrBMP[offset * 4 + 0] = unsigned  char(int(255 * R * flux));
+	ptrBMP[offset * 4 + 1] = unsigned char(int(255 * G * flux));
+	ptrBMP[offset * 4 + 2] = unsigned char(int(255 * B * flux));
+	ptrBMP[offset * 4 + 3] = unsigned char(255);
 }
+__global__ void initCurand(curandState* states, unsigned long seed, int width, int height) {
+	int x = blockIdx.x * blockDim.x + threadIdx.x;
+	int y = blockIdx.y * blockDim.y + threadIdx.y;
+	int tid = x + y * width;
 
+	if (x < width && y < height) {
+		// Each thread gets a unique seed using its thread id and the global seed
+		curand_init(seed, tid, 0, &states[tid]);
+	}
+}
 void makeDisk(DataBlock* d, double inclination, double bh_mass, double outerRadius) {
 	dim3    blocks(BMPDIM / 16, BMPDIM / 16);
 	dim3    threads(16, 16);
 	clearBMP << <blocks, threads >> > (d->dev_bitmap);
-	makeDiskCuda << <blocks, threads >> > (d->dev_bitmap, d->dev_box_xy, inclination, bh_mass, outerRadius);
-	double 	maxFluxPrimary = -1e15;
+	fillBHDisk << <blocks, threads >> > (d->dev_BHDisk);
+	int totalThreads = BMPDIM * BMPDIM;
+
+	// Allocate memory for curandState
+	curandState* devStates;
+	cudaMalloc((void**)&devStates, totalThreads * sizeof(curandState));
+
+	// Initialize the curandState for each thread
+	initCurand << <blocks, threads >> > (devStates, time(NULL), BMPDIM, BMPDIM);
+
+	makeDiskCuda << <blocks, threads >> > (d->dev_BHDisk, d->dev_box_xy, inclination, bh_mass, outerRadius, BMPDIM, devStates);
+	// Cleanup
+	cudaFree(devStates);
+	double maxFluxPrimary = -1e15;
 	double minFluxPrimary = 1e15;
 	double maxFluxSecundary = -1e15;
 	double minFluxSecundary = 1e15;
 	double powerScale = 0.99;
 	double* host_box_xy = (double*)malloc(11 * BMPDIM * BMPDIM * sizeof(double));
+	double* host_BHDisk = (double*)malloc(BMPDIM * BMPDIM * sizeof(double));
 
 	double 	amax = -1e15;
 	double amin = 1e15;
+	double 	bmax = -1e15;
+	double bmin = 1e15;
+	double 	aamax = -1e15;
+	double aamin = 1e15;
+	double 	bbmax = -1e15;
+	double bbmin = 1e15;
 
 	HANDLE_ERROR(cudaMemcpy(host_box_xy, d->dev_box_xy, 11 * BMPDIM * BMPDIM * sizeof(double), cudaMemcpyDeviceToHost));
+	//HANDLE_ERROR(cudaMemcpy(host_BHDisk, d->dev_BHDisk, BMPDIM * BMPDIM * sizeof(double), cudaMemcpyDeviceToHost));
 	for (int n = 0; n < BMPDIM * BMPDIM; n++) {
-		if (amax < host_box_xy[n * 11 + 10]) { amax = host_box_xy[n * 11 + 10]; }
-		if (amin > host_box_xy[n * 11 + 10]) { amin = host_box_xy[n * 11 + 10]; }
+		if (amax < host_box_xy[n * 11 + 0]) { amax = host_box_xy[n * 11 + 0]; }
+		if (amin > host_box_xy[n * 11 + 0]) { amin = host_box_xy[n * 11 + 0]; }
+		if (bmax < host_box_xy[n * 11 + 1]) { bmax = host_box_xy[n * 11 + 1]; }
+		if (bmin > host_box_xy[n * 11 + 1]) { bmin = host_box_xy[n * 11 + 1]; }
+		if (aamax < host_box_xy[n * 11 + 8]) { aamax = host_box_xy[n * 11 + 8]; }
+		if (aamin > host_box_xy[n * 11 + 8]) { aamin = host_box_xy[n * 11 + 8]; }
+		if (bbmax < host_box_xy[n * 11 + 10]) { bbmax = host_box_xy[n * 11 + 10]; }
+		if (bbmin > host_box_xy[n * 11 + 10]) { bbmin = host_box_xy[n * 11 + 10]; }
+		//if (aamax < host_BHDisk[n * 1]) { aamax = host_BHDisk [n * 1 + 0]; }
+		//if (aamin > host_BHDisk[n * 1 ]) { aamin = host_BHDisk [n * 1 + 0]; }
+
 		//std::cout << host_box_xy[n * 8 + 1] << std::endl;
 		if (maxFluxPrimary < host_box_xy[n * 11 + 3]) { maxFluxPrimary = host_box_xy[n * 11 + 3]; }
 		if (minFluxPrimary > host_box_xy[n * 11 + 3] && host_box_xy[n * 11 + 3] > DBL_EPSILON) { minFluxPrimary = host_box_xy[n * 11 + 3]; }
 		if (maxFluxSecundary < host_box_xy[n * 11 + 7]) { maxFluxSecundary = host_box_xy[n * 11 + 7]; }
 		if (minFluxSecundary > host_box_xy[n * 11 + 7] && host_box_xy[n * 11 + 7] > DBL_EPSILON) { minFluxSecundary = host_box_xy[n * 11 + 7]; }
 
-		//std::cout << n << "): Primary Fo: " << host_box_xy[n * 8 + 3] << " Secndary: " << host_box_xy[n * 8 + 7] << std::endl;
+		//std::cout << n << "): Primary wavelength: " << host_box_xy[n * 11 + 2] << " Secundary wavelength: " << host_box_xy[n *11 +6] << std::endl;
 	}
-	std::cout << "Periastron between " << amin << " and " << amax << std::endl;
-	//std::cout << "alpha between " << amin * 180.0f / PI << " and " << amax * 180.0f / PI << std::endl;
+	std::cout << "radius index   between " << int(aamin) << " and " << int(aamax) << std::endl;
+	std::cout << "phi index  between " << int(bbmin) << " and " << int(bbmax) << std::endl;
+	std::cout << "radius  between " << amin << " and " << amax << std::endl;
+	std::cout << "phi   between " << bmin * 180.0 / PI << " and " << bmax * 180.0 / PI << std::endl;
 	std::cout << "Primary Flux between " << minFluxPrimary << " and " << maxFluxPrimary << std::endl;
 	std::cout << "Secundary Flux between " << minFluxSecundary << " and " << maxFluxSecundary << std::endl;
 	for (int n = 0; n < BMPDIM * BMPDIM; n++) {
-		host_box_xy[n * 11 + 3] = std::pow((std::abs(host_box_xy[n * 11 + 3]) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale);//Enhances "contrast"
-		host_box_xy[n * 11 + 7] = std::pow((std::abs(host_box_xy[n * 11 + 7]) + minFluxSecundary) / (maxFluxSecundary + minFluxSecundary), powerScale)/1.0f;//Enhances "contrast"
+		host_box_xy[n * 11 + 3] = std::pow((std::abs(host_box_xy[n * 11 + 3] * host_box_xy[n * 11 + 2]) + minFluxPrimary) / (maxFluxPrimary + minFluxPrimary), powerScale);//Enhances "contrast"
+		host_box_xy[n * 11 + 7] = std::pow((std::abs(host_box_xy[n * 11 + 7] * host_box_xy[n * 11 + 6]) + minFluxSecundary) / (maxFluxSecundary + minFluxSecundary), powerScale) / 1.0f;//Enhances "contrast"
 		//std::cout <<"(x,y): ("<<Particles[n * 8 + 2]<< ", " << Particles[n * 8 + 3] << ") -> Primary Flux " << Particles[n * 8 + 4] << " and Secundary " << Particles[n * 8 + 7] << std::endl;
 	}
 	free(host_box_xy);//free CPU memory
-	normalizeBMP << <blocks, threads >> > (d->dev_bitmap, d->dev_box_xy, minFluxPrimary, maxFluxPrimary, minFluxSecundary, maxFluxSecundary);
+	//free(host_BHDisk);//free CPU memory
+	normalizeBMP << <blocks, threads >> > (d->dev_bitmap, d->dev_box_xy, minFluxPrimary, maxFluxPrimary, minFluxSecundary, maxFluxSecundary, powerScale);
+	//unsigned char* host_BMP = (unsigned char*)malloc(4 * BMPDIM * BMPDIM * sizeof(unsigned char));
+	//HANDLE_ERROR(cudaMemcpy(host_BMP, d->dev_bitmap, 4 * BMPDIM * BMPDIM * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+	//int 	BMPmax = -1000;
+	//int BMPmin = 1000;
+	//for (int n = 0; n < BMPDIM * BMPDIM; n++) {
+	//	if (BMPmax < int(host_BMP[n * 4 + 1])) { BMPmax = int(host_BMP[n * 4 + 1]); }
+	//	if (BMPmin > int(host_BMP[n * 4 + 1])) { BMPmin = int(host_BMP[n * 4 + 1]); }
+	//	//std::cout << n << "): BMP: (" <<int(host_BMP[n * 4 + 0]) << " , " << host_BMP[n * 4 + 1] << " , " <<host_BMP[n * 4 + 2] << " , " << host_BMP[n * 4 + 3] << "). " << std::endl;
+	//}
+	//std::cout << "Green  between " << BMPmin << " and " << BMPmax << std::endl;
+	//free(host_BMP);//free CPU memory
 }
 
 void generate_frame(DataBlock* d, int ticks) {
 	dim3    blocks(BMPDIM / 16, BMPDIM / 16);
 	dim3    threads(16, 16);
 	//clearBMP << <blocks, threads >> > (d->dev_bitmap);
-	//kernel << <blocks, threads >> > (d->dev_bitmap, ticks);
-
+	//unsigned char* host_BMP = (unsigned char*)malloc(4 * BMPDIM * BMPDIM * sizeof(unsigned char));
+	//HANDLE_ERROR(cudaMemcpy(host_BMP, d->dev_bitmap, 4 * BMPDIM * BMPDIM * sizeof(unsigned char), cudaMemcpyDeviceToHost));
+	//int 	BMPmax = -1000;
+	//int BMPmin = 1000;
+	//for (int n = 0; n < BMPDIM * BMPDIM; n++) {
+	//	if (BMPmax < int(host_BMP[n * 4 + 1])) { BMPmax = int(host_BMP[n * 4 + 1]); }
+	//	if (BMPmin > int(host_BMP[n * 4 + 1])) { BMPmin = int(host_BMP[n * 4 + 1]); }
+	//	//std::cout << n << "): BMP: (" <<int(host_BMP[n * 4 + 0]) << " , " << host_BMP[n * 4 + 1] << " , " <<host_BMP[n * 4 + 2] << " , " << host_BMP[n * 4 + 3] << "). " << std::endl;
+	//}
+	//std::cout << "Green   between " << BMPmin << " and " << BMPmax << std::endl;
+	//free(host_BMP);//free CPU memory
+	//clearBMP << <blocks, threads >> > (d->dev_bitmap);
+	incrementDiskCuda << <blocks, threads >> > (ticks, d->dev_bitmap, d->dev_BHDisk, d->dev_box_xy, BMPDIM);
 	HANDLE_ERROR(cudaMemcpy(d->bitmap->get_ptr(),
 		d->dev_bitmap,
 		d->bitmap->image_size(),
 		cudaMemcpyDeviceToHost));
+	//std::cin.get();
+	//if (ticks > 10) { std::cin.get(); }
+	//for (int n = 0; n < BMPDIM * BMPDIM; n++) {
+	//	std::cout << n << "): BMP: (" << d->bitmap->get_ptr()[n * 4 + 0] << " , " << d->bitmap->get_ptr()[n * 4 + 1] << " , " << d->bitmap->get_ptr()[n * 4 + 2] << " , " << d->bitmap->get_ptr()[n * 4 + 3] << "). " << std::endl;
+	//}
 }
 
 // clean up memory allocated on the GPU
 void cleanup(DataBlock* d) {
 	HANDLE_ERROR(cudaFree(d->dev_bitmap));
 	HANDLE_ERROR(cudaFree(d->dev_box_xy));
-	HANDLE_ERROR(cudaFree(d->dev_box_r_phi_old));
-	HANDLE_ERROR(cudaFree(d->dev_box_r_phi_now));
+	HANDLE_ERROR(cudaFree(d->dev_BHDisk));
 	std::cout << "GPU cleaned" << std::endl;
 }
 

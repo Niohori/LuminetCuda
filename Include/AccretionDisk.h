@@ -57,9 +57,8 @@
 }
 
 struct DataBlock {
-	double* dev_box_xy;//[indx] [indy][rPrimary][phiPrimary][rsPrimary][FoPrimary] [rSecundary] [phiSecundary] [rsSecundary] [FoSecundary]->8*BMPDIM*BMPDIM
-	double* dev_box_r_phi_old;//[ind_r] [ind_phi][rPrimary]->1*BMPDIM*BMPDIM
-	double* dev_box_r_phi_now;//[ind_r] [ind_phi][rPrimary]->1*BMPDIM*BMPDIM
+	double* dev_box_xy;//[indx] [indy][rPrimary][phiPrimary][rsPrimary][FoPrimary] [rSecundary] [phiSecundary] [rsSecundary] [FoSecundary][impactParameter][opacity][free]->11*BMPDIM*BMPDIM
+	double* dev_BHDisk;//[ind_r] [ind_phi][wavelength]->1*BMPDIM*BMPDIM
 	unsigned char* dev_bitmap;/// [indx] [indy] [Rcolor] [Gcolor] [Bcolor] [alphacolor]->4*BMPDIM*BMPDIM
 	CPUAnimBitmap* bitmap;
 };
@@ -79,7 +78,7 @@ public:
 	AccretionDisk(void);
 	AccretionDisk(const double&, const double&, const double&, const double&, const int&);
 	~AccretionDisk();
-	void playBMP();
+	void playBMP(double,double);
 	//void generate_frame(DataBlock* d, int);
 
 public://variables
