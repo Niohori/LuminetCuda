@@ -898,18 +898,17 @@ __device__ void  get_r_phi_index(double r, double phi, double outerRadius, int& 
 	return;
 }
 __device__ void  get_x_y_index(double r, double phi, double outerRadius, int& ind_x, int& ind_y) {
-	ind_x = int(round(double(BMPDIM)/2.0f * r / (outerRadius)*cos(phi))+ double(BMPDIM) / 2.0f);
+	ind_x = int(round(double(BMPDIM) / 2.0f * r / (outerRadius)*cos(phi)) + double(BMPDIM) / 2.0f);
 	ind_y = int(round(double(BMPDIM) / 2.0f * r / (outerRadius)*sin(phi)) + double(BMPDIM) / 2.0f);
 	return;
 }
 
-
 __device__ double  inline primaryOpacity(double r, double bh_mass, double outerRadius) {
-
-	//op = 1.0f;
+	double op = 1.0f;
 	if (r < 6.0f * bh_mass) { return 0.0f; }
 	if (r > outerRadius) { return 0.0f; }
-	double op = 1.0f - (r - 6.0f * bh_mass) / (outerRadius - 6.0f * bh_mass);
+	return op;
+	op = 1.0f - (r - 6.0f * bh_mass) / (outerRadius - 6.0f * bh_mass);
 	//op = (outerRadius * outerRadius - 6.0f * bh_mass * 6.0f * bh_mass) - (r * r - 6.0f * bh_mass * 6.0f * bh_mass)/ (outerRadius * outerRadius - 6.0f * bh_mass * 6.0f * bh_mass);
 	if (op < DBL_EPSILON) { op = 0.0f; }
 	return op;
@@ -1050,10 +1049,10 @@ __device__ double generate_random(curandState* globalState, int threadId) {
 
 __device__ double wavelength(double r, double phi) {
 	double lambda_0 = 380.0f;
-	double lambda_tru = lambda_0*pow(r/10.0f,0.75f);
+	double lambda_tru = lambda_0 * pow(r / 10.0f, 0.75f);
 	double epsilon = 0.1f;
-	double perturbation = cos(phi* r);
-	return lambda_tru*(1.0f+epsilon* perturbation);
+	double perturbation = cos(phi * r);
+	return lambda_tru * (1.0f + epsilon * perturbation);
 }
 
 __device__ double spiralWavelength(double r, double phi) {
@@ -1070,21 +1069,21 @@ __device__ double spiralWavelength(double r, double phi) {
 }
 
 __device__ void  wavelength_to_rgb(double wavelength, double& R, double& G, double& B, double gamma) {
-	if (wavelength < 380 || gamma < DBL_EPSILON) {
-		wavelength = 380.0;
-		R = 0.0f;
-		G = 0.0f;
-		B = 0.0f;
-		return;
-	}
+	//if (wavelength < 380 || gamma < DBL_EPSILON) {
+	//	wavelength = 380.0;
+	//	R = 0.0f;
+	//	G = 0.0f;
+	//	B = 0.0f;
+	//	return;
+	//}
 
-	if (wavelength > 750 || gamma < DBL_EPSILON) {
-		wavelength = 750.0;
-		R = 0.0f;
-		G = 0.0f;
-		B = 0.0f;
-		return;
-	}
+	//if (wavelength > 750 || gamma < DBL_EPSILON) {
+	//	wavelength = 750.0;
+	//	R = 0.0f;
+	//	G = 0.0f;
+	//	B = 0.0f;
+	//	return;
+	//}
 
 	if (wavelength >= 380 && wavelength <= 440) {
 		double attenuation = 0.3 + 0.7 * (wavelength - 380) / (440 - 380);
@@ -1119,9 +1118,9 @@ __device__ void  wavelength_to_rgb(double wavelength, double& R, double& G, doub
 		B = 0.0;
 	}
 	else {
-		R = 0.0;
-		G = 0.0;
-		B = 0.0;
+		R = 1.0;
+		G = 1.0;
+		B = 1.0;
 	}
 
 	return;
@@ -1166,6 +1165,12 @@ __global__ void incrementDiskCuda(int ticks, unsigned char* ptrBMP, double* dev_
 	waveLengthPrimary = dev_BHDisk[indPhiPrimary + indRPrimary * dim];
 	waveLengthSecundary = dev_BHDisk[indPhiSecundary + indRSecundary * dim];
 	double flux = 0.0f;
+	double Rp = 0.0f;
+	double Gp = 0.0f;;
+	double Bp = 0.0f;
+	double Rs = 0.0f;
+	double Gs = 0.0f;;
+	double Bs = 0.0f;
 	double R = 0.0f;
 	double G = 0.0f;;
 	double B = 0.0f;
@@ -1174,19 +1179,34 @@ __global__ void incrementDiskCuda(int ticks, unsigned char* ptrBMP, double* dev_
 	//waveLengthSecundary = spiralWavelength(radiusSecundary, phiSecundaryNew);
 	//waveLengthPrimary = wavelength(radiusPrimary, phiPrimaryNew);
 	//waveLengthSecundary = wavelength(radiusSecundary, phiSecundaryNew);
-	if (waveLengthSecundary >= minWL) {
+	//if (waveLengthSecundary >= minWL) {
 		//waveLength = minWL + waveLengthSecundary * (750.0f - minWL);
-		waveLength = waveLengthSecundary;
-		flux = (opacity * fluxPrimary + (1.0f - opacity) * fluxSecundary);
-		wavelength_to_rgb(waveLength, R, G, B, 1.0);
-	}
-	if (waveLengthPrimary >= minWL) {
+	waveLength = waveLengthSecundary;
+	flux = (opacity * fluxPrimary + (1.0f - opacity) * fluxSecundary);
+	wavelength_to_rgb(waveLength, Rs, Gs, Bs, 1.0);
+	//}
+	//if (waveLengthPrimary >= minWL) {
 		//waveLength = minWL + waveLengthPrimary * (750.0f - minWL);
-		waveLength = waveLengthPrimary;
-		flux = (opacity * fluxPrimary + (1.0f - opacity) * fluxSecundary);
-		wavelength_to_rgb(waveLength, R, G, B, 1.0);
-	}
+	waveLength = waveLengthPrimary;
+	flux = (opacity * fluxPrimary + (1.0f - opacity) * fluxSecundary);
+	wavelength_to_rgb(waveLength, Rp, Gp, Bp, 1.0);
+	//}
 	//flux = fluxSecundary;//TEMPORARY
+	//R = G = B = 1.0f;
+	//__syncthreads();
+	R = Rp;
+	G = Gp;
+	B = Bp;
+
+	/*if (Rs > R) { R = Rs; }
+	if (Gs > G) { R = Gs; }
+	if (Bs > B) { R = Bs; }*/
+	if (opacity<1.0f) {
+		R = Rs;
+		G = Gs;
+		B= Bs;
+	}
+
 	ptrBMP[offset * 4 + 0] = unsigned  char(int(255 * R * flux));
 	ptrBMP[offset * 4 + 1] = unsigned char(int(255 * G * flux));
 	ptrBMP[offset * 4 + 2] = unsigned char(int(255 * B * flux));
@@ -1219,7 +1239,7 @@ __global__ void makeDiskCuda(double* dev_BHDisk, double* box_xy, double inclinat
 	if (periastron > 0.0f) {
 		radius = calc_radius_from_perastion(periastron, impactParameter, alpha, bh_mass, inclination, 0);
 
-		if (radius > 6.0f * bh_mass&&radius <= outerRadius) {
+		if (radius > 6.0f * bh_mass && radius <= outerRadius) {
 			radiusPrimary = radius;
 			redshiftPrimary = redshift_factor(radiusPrimary, alpha, inclination, bh_mass, impactParameter);
 			//redshiftPrimary = 1.0f;
@@ -1250,9 +1270,9 @@ __global__ void makeDiskCuda(double* dev_BHDisk, double* box_xy, double inclinat
 	}
 
 	double waveLengthPrimary = curand_uniform(&globalState[offset]);
-	double minWL = 550.0f;// 380.0f;
+	double minWL =  380.0f;
 	waveLengthPrimary = minWL + waveLengthPrimary * (750.0f - minWL);
-	waveLengthPrimary = 600.0f;
+	//waveLengthPrimary = 600.0f;
 	if (radiusPrimary > outerRadius) {
 		radiusPrimary = 0.0;
 		redshiftPrimary = 0.0;
@@ -1290,14 +1310,15 @@ __global__ void makeDiskCuda(double* dev_BHDisk, double* box_xy, double inclinat
 	//dev_BHDisk[indPhiP + indRP * dim] = 0.0f;
 	//dev_BHDisk[indPhiS + indRS * dim] = 0.0f;
 
-	//if (fluxSecundary > 0.0f) {
-	//	dev_BHDisk[indPhiS + indRS * dim] = 700.f;//waveLengthPrimary;//x;
-	//	//return;
-	//}
+	if (fluxSecundary > 0.0f) {
+		dev_BHDisk[indPhiS + indRS * dim] = waveLengthPrimary;//x;
+		//return;
+	}
 	if (fluxPrimary > 0.0f) {
 		dev_BHDisk[indPhiP + indRP * dim] = waveLengthPrimary;//x;
 		//return;
 	}
+	//();
 	return;
 }
 
